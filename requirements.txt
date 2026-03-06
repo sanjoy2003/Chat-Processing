@@ -1,6 +1,7 @@
 streamlit
-yfinance
-pandas
-numpy
-plotly
-reportlab
+python-dotenv
+langchain
+langchain-core
+langchain-mistralai
+requests
+pillow
