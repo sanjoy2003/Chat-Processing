@@ -1,727 +1,790 @@
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from dotenv import load_dotenv
 import os
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import re
+import time
+import base64
+import streamlit as st
+import streamlit.components.v1 as components
+from langchain_mistralai import ChatMistralAI
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from collections import Counter
+import requests
+import urllib.parse
+import io
+from PIL import Image as PILImage
 
-st.set_page_config(page_title="Stock Research Ai Engine", layout="wide", page_icon="⚡")
+# ── Load ENV ─────────────────────────────────────────
+load_dotenv()
+api_key = os.getenv("MISTRAL_API_KEY")
 
+if not api_key:
+    st.error("❌ MISTRAL_API_KEY not found. Check your .env file.")
+    st.stop()
+
+# ── Page Config ──────────────────────────────────────
+st.set_page_config(
+    page_title="SANJU — AI Chat",
+    page_icon="✦",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── CSS ──────────────────────────────────────────────
 st.markdown("""
 <style>
-/* ─── BASE ─────────────────────────────────────────── */
-html, body,
-[data-testid="stAppViewContainer"],
-section.main > div {
-    background-color: #0a0e17 !important;
-    color: #e2e8f0;
-    font-family: 'Segoe UI', sans-serif;
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Space+Mono:wght@400;700&family=Noto+Sans+Bengali:wght@400;600;700&display=swap');
+
+:root {
+    --bg-void:#02020a; --bg-panel:#0b0b1a; --bg-card:#0f0f1f; --bg-elevated:#141428;
+    --border-dim:rgba(255,255,255,0.04); --border-mid:rgba(255,255,255,0.08);
+    --amber:#f5a623; --violet:#7c5cbf; --teal:#2dd4bf;
+    --text-0:#f0f0fa; --text-1:#a0a0c0; --text-2:#5a5a80; --text-3:#2e2e50;
+    --r-sm:10px; --r-md:16px;
 }
-[data-testid="stSidebar"]         { background-color: #0d1117 !important; }
-[data-testid="stHeader"]          { background-color: #0a0e17 !important; }
-.block-container                  { padding-top: 1.5rem !important; }
+html,body,.stApp { background:var(--bg-void)!important; font-family:'Outfit','Noto Sans Bengali',sans-serif!important; color:var(--text-0)!important; }
+.stApp::before { content:''; position:fixed; inset:0;
+  background: radial-gradient(ellipse 80% 60% at 10% 0%,rgba(124,92,191,.12) 0%,transparent 60%),
+              radial-gradient(ellipse 60% 50% at 90% 100%,rgba(245,166,35,.08) 0%,transparent 60%);
+  pointer-events:none; z-index:0; }
 
-/* ─── HERO TITLE ──────────────────────────────────── */
-.hero-wrap { padding: 10px 0 6px 0; }
-.hero-title {
-    font-size: 44px; font-weight: 900; letter-spacing: -1px;
-    background: linear-gradient(90deg, #00F5A0 0%, #00D9F5 55%, #a78bfa 100%);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    line-height: 1.1; margin: 0;
-}
-.hero-sub {
-    font-size: 13px; color: #4b5563; letter-spacing: 3px;
-    margin-top: 4px; text-transform: uppercase;
-}
+.sanju-header { display:flex; align-items:center; gap:18px; padding:24px 4px 18px; border-bottom:1px solid var(--border-mid); margin-bottom:20px; position:relative; z-index:2; }
+.sanju-emblem { position:relative; width:52px; height:52px; flex-shrink:0; }
+.sanju-emblem-ring { position:absolute; inset:0; border-radius:14px; border:1.5px solid rgba(245,166,35,.5); animation:ringPulse 3s ease-in-out infinite; }
+.sanju-emblem-inner { position:absolute; inset:5px; background:linear-gradient(135deg,#f5a623,#d4880a); border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:20px; box-shadow:0 0 24px rgba(245,166,35,.6); }
+@keyframes ringPulse { 0%,100%{transform:scale(1);opacity:.6;} 50%{transform:scale(1.08);opacity:1;} }
+.sanju-wordmark { flex:1; }
+.sanju-name { font-size:2.2rem; font-weight:900; letter-spacing:-2px; line-height:1; color:var(--text-0); text-shadow:0 0 40px rgba(245,166,35,.3); }
+.sanju-name em { font-style:normal; color:var(--amber); }
+.online-pill { display:flex; align-items:center; gap:8px; background:rgba(45,212,191,.06); border:1px solid rgba(45,212,191,.2); border-radius:100px; padding:8px 18px; font-family:'Space Mono',monospace; font-size:.62rem; color:var(--teal); letter-spacing:2px; }
+.online-dot { width:6px; height:6px; background:var(--teal); border-radius:50%; box-shadow:0 0 8px var(--teal); animation:blinkDot 2s ease-in-out infinite; }
+@keyframes blinkDot { 0%,100%{opacity:1;} 50%{opacity:.2;} }
 
-/* ─── INPUTS ──────────────────────────────────────── */
-label { color: black !important; font-weight: 600; font-size: 13px !important; }
+.stats-bar { display:flex; background:var(--bg-card); border:1px solid var(--border-mid); border-radius:var(--r-md); margin-bottom:16px; overflow:hidden; z-index:2; position:relative; }
+.stat-item { flex:1; padding:10px 14px; border-right:1px solid var(--border-dim); display:flex; flex-direction:column; gap:2px; }
+.stat-item:last-child { border-right:none; }
+.stat-label { font-family:'Space Mono',monospace; font-size:.5rem; color:var(--text-2); letter-spacing:2px; text-transform:uppercase; }
+.stat-value { font-size:.8rem; font-weight:700; color:var(--amber); }
 
-.stNumberInput div[data-baseweb="input"],
-.stTextInput  div[data-baseweb="input"] {
-    background: #111827 !important;
-    border: 1px solid #1f2937 !important;
-    border-radius: 10px !important;
-}
-.stNumberInput input, .stTextInput input {
-    color: #00F5A0 !important; font-weight: 700 !important;
-    font-size: 16px !important; background: transparent !important;
-}
-.stNumberInput button {
-    background: transparent !important; color: #00F5A0 !important; border: none !important;
-}
-.stNumberInput div[data-baseweb="input"]:focus-within,
-.stTextInput  div[data-baseweb="input"]:focus-within {
-    border-color: #00F5A0 !important; box-shadow: 0 0 0 2px rgba(0,245,160,0.15) !important;
-}
+.msg-wrap { display:flex; gap:12px; margin:14px 0; animation:fadeUp .4s cubic-bezier(.16,1,.3,1) both; position:relative; z-index:2; }
+.msg-wrap.user-wrap { flex-direction:row-reverse; }
+@keyframes fadeUp { from{opacity:0;transform:translateY(20px) scale(.98);} to{opacity:1;transform:none;} }
+.av { width:36px; height:36px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0; margin-top:4px; }
+.av-user { background:linear-gradient(145deg,#7c5cbf,#a855f7); box-shadow:0 4px 16px rgba(124,92,191,.4); }
+.av-ai   { background:linear-gradient(145deg,#d4880a,#f5a623); box-shadow:0 4px 16px rgba(245,166,35,.4); }
+.bubble { max-width:72%; padding:13px 18px; border-radius:20px; font-size:.92rem; line-height:1.75; position:relative; font-family:'Outfit','Noto Sans Bengali',sans-serif; }
+.bubble-user { background:linear-gradient(135deg,rgba(124,92,191,.15),rgba(168,85,247,.1)); border:1px solid rgba(124,92,191,.25); border-top-right-radius:4px; }
+.bubble-ai { background:var(--bg-elevated); border:1px solid var(--border-mid); border-top-left-radius:4px; }
+.bubble-ai::before { content:''; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,var(--amber),transparent); border-radius:20px 20px 0 0; opacity:.5; }
+.bubble-meta { font-family:'Space Mono',monospace; font-size:.52rem; color:var(--text-2); letter-spacing:2px; text-transform:uppercase; margin-bottom:7px; display:flex; align-items:center; gap:8px; }
+.bubble-meta-dot { width:4px; height:4px; background:var(--amber); border-radius:50%; }
+.attach-badge { display:inline-block; background:rgba(245,166,35,.08); border:1px solid rgba(245,166,35,.2); border-radius:8px; padding:4px 10px; font-family:'Space Mono',monospace; font-size:.6rem; color:var(--amber); margin-bottom:8px; }
+.lang-badge { display:inline-block; font-family:'Space Mono',monospace; font-size:.5rem; color:var(--teal); background:rgba(45,212,191,.08); border:1px solid rgba(45,212,191,.2); border-radius:6px; padding:2px 8px; letter-spacing:1px; margin-left:8px; }
 
-/* ─── GENERATE BUTTON ─────────────────────────────── */
-.stButton > button {
-    background: linear-gradient(135deg, #00F5A0, #00D9F5) !important;
-    color: #000 !important; font-weight: 800 !important; font-size: 15px !important;
-    border-radius: 12px !important; height: 54px !important;
-    width: 100% !important; border: none !important;
-    box-shadow: 0 0 28px rgba(0,245,160,0.3) !important;
-    letter-spacing: 1.5px !important; transition: 0.2s !important;
-}
-.stButton > button:hover { transform: scale(1.02) !important; }
+/* TYPEWRITER CURSOR */
+.typing-cursor { display:inline-block; width:2px; height:1em; background:var(--amber); margin-left:2px; animation:cursorBlink .7s ease-in-out infinite; vertical-align:text-bottom; }
+@keyframes cursorBlink { 0%,100%{opacity:1;} 50%{opacity:0;} }
 
-/* ─── DIVIDER ─────────────────────────────────────── */
-hr { border-color: #1f2937 !important; margin: 18px 0 !important; }
+.thinking-wrap { display:flex; gap:12px; margin:16px 0; position:relative; z-index:2; animation:fadeUp .3s ease both; }
+.thinking-bubble { background:var(--bg-card); border:1px solid rgba(245,166,35,.15); border-radius:20px; border-top-left-radius:4px; padding:16px 20px; max-width:70%; }
+.thinking-header { font-family:'Space Mono',monospace; font-size:.52rem; color:var(--amber); letter-spacing:2px; text-transform:uppercase; margin-bottom:12px; }
+.thinking-step { display:flex; align-items:flex-start; gap:10px; padding:6px 0; font-size:.75rem; color:var(--text-2); font-family:'Space Mono',monospace; border-bottom:1px solid var(--border-dim); }
+.thinking-step:last-child { border-bottom:none; }
+.step-icon { font-size:10px; margin-top:3px; flex-shrink:0; animation:spinIcon 2s linear infinite; }
+@keyframes spinIcon { from{transform:rotate(0deg);}to{transform:rotate(360deg);} }
+.step-icon.done { animation:none; }
+.shimmer-line { height:2px; background:linear-gradient(90deg,transparent,var(--amber),var(--teal),transparent); background-size:200% 100%; border-radius:99px; margin-top:10px; animation:shimmer 1.8s linear infinite; }
+@keyframes shimmer { from{background-position:200% 0;}to{background-position:-200% 0;} }
 
-/* ─── METRIC CARD ─────────────────────────────────── */
-.mc {
-    background: #111827;
-    border-radius: 14px; padding: 16px 12px; text-align: center;
-    border: 1px solid #1f2937; transition: 0.2s ease; height: 100%;
-    position: relative; overflow: hidden;
-}
-.mc::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0;
-    height: 2px; border-radius: 14px 14px 0 0;
-}
-.mc:hover { transform: translateY(-3px); }
-.mc-label { font-size: 10px; color: #6b7280; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
-.mc-val   { font-size: 28px; font-weight: 800; line-height: 1; }
-.mc-hint  { font-size: 10px; color: #4b5563; margin-top: 5px; }
+.welcome-wrap { text-align:center; padding:36px 0 22px; position:relative; z-index:2; }
+.welcome-logo { font-size:3.2rem; margin-bottom:14px; display:block; animation:floatLogo 4s ease-in-out infinite; filter:drop-shadow(0 0 20px rgba(245,166,35,.6)); }
+@keyframes floatLogo { 0%,100%{transform:translateY(0) rotate(-3deg);}50%{transform:translateY(-10px) rotate(3deg);} }
+.welcome-title { font-size:1.8rem; font-weight:800; color:var(--text-0); letter-spacing:-1px; margin-bottom:6px; }
+.welcome-sub { font-family:'Space Mono',monospace; font-size:.6rem; color:var(--text-2); letter-spacing:3px; text-transform:uppercase; margin-bottom:26px; }
+.starters-label { font-family:'Space Mono',monospace; font-size:.56rem; color:var(--text-3); letter-spacing:3px; text-transform:uppercase; margin-bottom:10px; }
+.history-label { font-family:'Space Mono',monospace; font-size:.5rem; color:var(--text-3); letter-spacing:2px; text-transform:uppercase; margin-bottom:6px; }
 
-/* color variants */
-.mc-g  { border-color: rgba(0,245,160,0.3);  box-shadow: 0 0 18px rgba(0,245,160,0.08); }
-.mc-g  .mc-val { color: #00F5A0; }
-.mc-g::before  { background: #00F5A0; }
+.stTextInput input { background:var(--bg-elevated)!important; border:1px solid var(--border-mid)!important; border-radius:var(--r-md)!important; color:var(--text-0)!important; font-family:'Outfit','Noto Sans Bengali',sans-serif!important; font-size:.95rem!important; transition:all .25s!important; caret-color:var(--amber)!important; padding:12px 18px!important; }
+.stTextInput input:focus { border-color:rgba(245,166,35,.4)!important; box-shadow:0 0 0 3px rgba(245,166,35,.07),0 4px 20px rgba(0,0,0,.3)!important; }
+.stTextInput input::placeholder { color:var(--text-3)!important; }
 
-.mc-y  { border-color: rgba(250,204,21,0.3); box-shadow: 0 0 18px rgba(250,204,21,0.08); }
-.mc-y  .mc-val { color: #FACC15; }
-.mc-y::before  { background: #FACC15; }
+.stButton>button { background:linear-gradient(135deg,#f5a623,#d4880a)!important; color:#000!important; border:none!important; border-radius:var(--r-sm)!important; font-family:'Outfit',sans-serif!important; font-weight:800!important; font-size:.88rem!important; transition:all .2s!important; box-shadow:0 4px 16px rgba(245,166,35,.3)!important; }
+.stButton>button:hover { transform:translateY(-2px)!important; box-shadow:0 8px 28px rgba(245,166,35,.45)!important; }
 
-.mc-b  { border-color: rgba(0,217,245,0.3);  box-shadow: 0 0 18px rgba(0,217,245,0.08); }
-.mc-b  .mc-val { color: #00D9F5; }
-.mc-b::before  { background: #00D9F5; }
+[data-testid="stSidebar"] { background:var(--bg-panel)!important; border-right:1px solid var(--border-mid)!important; }
+[data-testid="stSidebar"] .stMarkdown h2,[data-testid="stSidebar"] .stMarkdown h3 { color:var(--text-0)!important; font-family:'Outfit',sans-serif!important; font-weight:700!important; }
+[data-testid="stSidebar"] label,[data-testid="stSidebar"] p { color:var(--text-1)!important; font-family:'Space Mono',monospace!important; font-size:.68rem!important; }
 
-.mc-p  { border-color: rgba(167,139,250,0.3);box-shadow: 0 0 18px rgba(167,139,250,0.08); }
-.mc-p  .mc-val { color: #a78bfa; }
-.mc-p::before  { background: #a78bfa; }
+[data-testid="stFileUploader"] { background:rgba(245,166,35,.03)!important; border:1.5px dashed rgba(245,166,35,.2)!important; border-radius:var(--r-md)!important; }
 
-.mc-r  { border-color: rgba(239,68,68,0.3);  box-shadow: 0 0 18px rgba(239,68,68,0.08); }
-.mc-r  .mc-val { color: #ef4444; }
-.mc-r::before  { background: #ef4444; }
-
-.mc-o  { border-color: rgba(249,115,22,0.3); box-shadow: 0 0 18px rgba(249,115,22,0.08); }
-.mc-o  .mc-val { color: #f97316; }
-.mc-o::before  { background: #f97316; }
-
-/* ─── VERDICT BANNER ──────────────────────────────── */
-.verdict-banner {
-    border-radius: 18px; padding: 28px 30px; text-align: center;
-    border: 1.5px solid; position: relative; overflow: hidden;
-}
-.vb-buy  { background: radial-gradient(ellipse at top,#052e16 0%,#0a0e17 70%); border-color:#10b981; box-shadow:0 0 40px rgba(16,185,129,0.2); }
-.vb-hold { background: radial-gradient(ellipse at top,#1c1200 0%,#0a0e17 70%); border-color:#f59e0b; box-shadow:0 0 40px rgba(245,158,11,0.2); }
-.vb-sell { background: radial-gradient(ellipse at top,#1f0000 0%,#0a0e17 70%); border-color:#ef4444; box-shadow:0 0 40px rgba(239,68,68,0.2); }
-
-.vb-tag   { font-size: 11px; letter-spacing: 3px; color: #6b7280; margin-bottom: 6px; }
-.vb-main  { font-size: 38px; font-weight: 900; margin: 4px 0 12px 0; line-height:1; }
-.vb-buy  .vb-main  { color: #10b981; }
-.vb-hold .vb-main  { color: #f59e0b; }
-.vb-sell .vb-main  { color: #ef4444; }
-.vb-reason{ font-size: 14px; color: #9ca3af; line-height: 1.7; max-width:600px; margin:0 auto; }
-.vb-hold-line { font-size: 13px; font-weight: 700; margin-top: 10px; }
-.vb-buy  .vb-hold-line { color: #34d399; }
-.vb-hold .vb-hold-line { color: #fbbf24; }
-.vb-sell .vb-hold-line { color: #f87171; }
-
-/* ─── STRATEGY CARDS ──────────────────────────────── */
-.sc {
-    border-radius: 14px; padding: 22px 16px; text-align: center;
-    border: 1px solid #1f2937; background: #111827;
-    transition: 0.2s ease; height: 100%;
-}
-.sc:hover { transform: translateY(-3px); }
-.sc-label { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; }
-.sc-val   { font-size: 28px; font-weight: 900; margin: 4px 0; }
-.sc-hint  { font-size: 11px; margin-top: 4px; opacity: 0.7; }
-
-.sc-sell { border-left: 3px solid #ef4444; }
-.sc-sell .sc-label { color: #f87171; }
-.sc-sell .sc-val   { color: #ef4444; }
-
-.sc-buy  { border-left: 3px solid #10b981; }
-.sc-buy  .sc-label { color: #34d399; }
-.sc-buy  .sc-val   { color: #10b981; }
-
-.sc-sig  { border-left: 3px solid #3b82f6; }
-.sc-sig  .sc-label { color: #60a5fa; }
-.sc-sig  .sc-val   { color: #3b82f6; font-size: 20px; }
-
-/* ─── PROFIT TABLE ROW ────────────────────────────── */
-.pt-row {
-    display:flex; justify-content:space-between; align-items:center;
-    background:#111827; border-radius:10px; padding:14px 20px;
-    margin:5px 0; border:1px solid #1f2937;
-}
-.pt-period { font-size:13px; color:#6b7280; min-width:80px; }
-.pt-price  { font-size:16px; font-weight:800; }
-.pt-pct    { font-size:13px; font-weight:700; min-width:70px; text-align:right; }
-.pt-inv    { font-size:12px; color:#4b5563; min-width:120px; text-align:right; }
-
-/* ─── INDICATOR ROW ───────────────────────────────── */
-.ir {
-    display:flex; justify-content:space-between; align-items:center;
-    background:#111827; border-radius:10px; padding:11px 16px;
-    margin:4px 0; border-left: 3px solid;
-}
-.ir-name   { font-size:12px; color:#6b7280; flex:1; }
-.ir-val    { font-size:12px; font-weight:700; color:#e2e8f0; flex:1; text-align:center; }
-.ir-status { font-size:12px; font-weight:600; flex:1; text-align:right; }
-
-/* ─── AI NOTE ─────────────────────────────────────── */
-.ai-note {
-    background: linear-gradient(135deg,#0f172a,#1e1b4b);
-    border:1px solid #312e81; border-radius:14px; padding:20px 24px; margin:12px 0;
-}
-.ai-note-hd { font-size:11px; color:#818cf8; letter-spacing:2px; margin-bottom:10px; text-transform:uppercase; }
-.ai-note-bd { font-size:14px; color:#cbd5e1; line-height:1.75; }
-
-/* ─── DOWNLOAD BUTTON ─────────────────────────────── */
-.stDownloadButton > button {
-    background: linear-gradient(135deg,#f59e0b,#FACC15) !important;
-    color:#000 !important; font-weight:800 !important; font-size:14px !important;
-    border-radius:12px !important; width:100% !important;
-    height:50px !important; border:none !important;
-    box-shadow:0 0 20px rgba(245,158,11,0.3) !important;
-}
-h2,h3 { color:#FACC15 !important; text-shadow:0 0 12px rgba(250,204,21,0.3); }
+code { background:rgba(245,166,35,.07)!important; border:1px solid rgba(245,166,35,.14)!important; border-radius:6px!important; padding:2px 7px!important; font-family:'Space Mono',monospace!important; color:var(--amber)!important; font-size:.8em!important; }
+hr { border-color:var(--border-dim)!important; margin:0!important; }
+::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:var(--border-mid); border-radius:99px; }
+#MainMenu,footer,header { visibility:hidden; }
+.block-container { padding-top:0!important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════════════
-#  HEADER
-# ═══════════════════════════════════════════════════════════════
-st.markdown("""
-<div class="hero-wrap">
-  <div class="hero-title">⚡ AI Stock Intelligence</div>
-  <div class="hero-title">Technical &amp; Fundamental Research Engine</div>
-</div>
-""", unsafe_allow_html=True)
-st.markdown("---")
+# ── SESSION STATE ────────────────────────────────────
+DEFAULTS = {
+    "messages": [], "response_times": [], "preset_input": "",
+    "auto_send": False, "search_history": [],
+    "pending_file": None, "pending_file_name": "", "pending_file_type": "",
+    "tts_enabled": True, "voice_lang": "🇧🇩 Bengali (bn-BD)",
+    "tts_pending": None, "tts_lang_pending": "en-US",
+    "voice_injected": "", "last_voice_msg": "",
+}
+for k, v in DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-# ═══════════════════════════════════════════════════════════════
-#  INPUTS
-# ═══════════════════════════════════════════════════════════════
-ci1, ci2, ci3, ci4 = st.columns([2, 1.5, 1, 1])
-with ci1: symbol = st.text_input("📌 Stock Symbol", "TATAPOWER.NS", help="Add .NS for NSE India")
-with ci2: investment_amount = st.number_input("💰 Investment (₹)", min_value=1000, value=50000, step=1000)
-with ci3: years = st.number_input("📅 Period (Years)", min_value=1, max_value=10, value=2, step=1)
-with ci4:
-    st.markdown("<div style='height:27px'></div>", unsafe_allow_html=True)
-    run = st.button("🚀 GENERATE AI REPORT")
+# ── HELPERS ──────────────────────────────────────────
+def get_top_searches(n=6):
+    if not st.session_state.search_history:
+        return []
+    return [item for item, _ in Counter(st.session_state.search_history).most_common(n)]
 
-if run:
-    with st.spinner("⏳ Fetching live data & computing signals..."):
-        stock = yf.Ticker(symbol)
-        data  = stock.history(period=f"{years}y")
-        info  = stock.info
+def detect_language(text):
+    bn = sum(1 for c in text if '\u0980' <= c <= '\u09FF')
+    return "BN" if bn > 2 else "EN"
 
-    if data.empty:
-        st.error("❌ Invalid symbol. Try RELIANCE.NS / TCS.NS / HDFCBANK.NS")
-        st.stop()
+def build_system(base, use_bn):
+    if use_bn:
+        return base + "\n\nGURU INSTRUCTION: User is writing in Bengali. You MUST respond ENTIRELY in Bengali (বাংলা). Natural, clear Bengali throughout."
+    return base
 
-    close  = data['Close']
-    volume = data['Volume']
-    high_s = data['High']
-    low_s  = data['Low']
-    open_s = data['Open']
+def is_image_request(text):
+    keywords = [
+        "generate image", "create image", "make image", "draw", "generate a picture",
+        "create a picture", "image of", "picture of", "generate photo", "make a photo",
+        "ছবি বানাও", "ছবি তৈরি", "ছবি দাও", "একটি ছবি", "আঁকো",
+    ]
+    t = text.lower()
+    return any(k in t for k in keywords)
 
-    # ── RSI ─────────────────────────────────────────────────────────────
-    delta    = close.diff()
-    gain     = delta.clip(lower=0).rolling(14).mean()
-    loss     = (-delta.clip(upper=0)).rolling(14).mean()
-    rsi      = 100 - (100 / (1 + gain / loss))
-    cur_rsi  = round(float(rsi.iloc[-1]), 2)
+def generate_image_pollinations(prompt):
+    encoded = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=768&nologo=true&enhance=true"
+    return url
 
-    # ── MACD ────────────────────────────────────────────────────────────
-    ema12       = close.ewm(span=12).mean()
-    ema26       = close.ewm(span=26).mean()
-    macd_line   = ema12 - ema26
-    signal_line = macd_line.ewm(span=9).mean()
-    macd_hist   = macd_line - signal_line
-    cur_macd    = round(float(macd_line.iloc[-1]), 2)
-    cur_sig     = round(float(signal_line.iloc[-1]), 2)
-    cur_hist    = round(float(macd_hist.iloc[-1]), 2)
-    macd_signal = "BUY" if cur_macd > cur_sig else "SELL"
+def export_markdown():
+    lines = ["# SANJU Chat Export\n"]
+    for item in st.session_state.messages:
+        role, content = item[0], item[1]
+        label = "**YOU**" if role == "user" else "**✦ SANJU**"
+        lines.append(f"{label}\n\n{content}\n\n---\n")
+    return "\n".join(lines)
 
-    # ── Bollinger Bands ──────────────────────────────────────────────────
-    sma20  = close.rolling(20).mean()
-    std20  = close.rolling(20).std()
-    bb_up  = sma20 + 2 * std20
-    bb_dn  = sma20 - 2 * std20
-    bb_rng = float(bb_up.iloc[-1]) - float(bb_dn.iloc[-1])
-    bb_pct = round(((float(close.iloc[-1]) - float(bb_dn.iloc[-1])) / bb_rng) * 100, 1) if bb_rng != 0 else 50
-
-    # ── SMA ──────────────────────────────────────────────────────────────
-    sma50  = close.rolling(50).mean()
-    sma200 = close.rolling(200).mean()
-
-    # ── ATR ──────────────────────────────────────────────────────────────
-    tr    = pd.concat([(high_s - low_s),
-                       (high_s - close.shift()).abs(),
-                       (low_s  - close.shift()).abs()], axis=1).max(axis=1)
-    atr14 = round(float(tr.rolling(14).mean().iloc[-1]), 2)
-
-    # ── Volume ───────────────────────────────────────────────────────────
-    avg_vol    = float(volume.rolling(20).mean().iloc[-1])
-    cur_vol    = float(volume.iloc[-1])
-    vol_signal = "HIGH" if cur_vol > avg_vol * 1.2 else ("LOW" if cur_vol < avg_vol * 0.8 else "NORMAL")
-
-    # ── Core numbers ─────────────────────────────────────────────────────
-    cur_price  = round(float(close.iloc[-1]), 2)
-    w52_high   = round(float(close.rolling(252).max().iloc[-1]), 2)
-    w52_low    = round(float(close.rolling(252).min().iloc[-1]), 2)
-    volatility = round(float(close.pct_change().std() * 100), 2)
-    shares     = int(investment_amount // cur_price)
-    upside     = round(((w52_high - cur_price) / cur_price) * 100, 2)
-    downside   = round(((cur_price - w52_low)  / cur_price) * 100, 2)
-    rr         = round(upside / downside, 2) if downside != 0 else 0
-
-    sma50_val  = round(float(sma50.iloc[-1]),  2)
-    sma200_val = round(float(sma200.iloc[-1]), 2) if len(data) >= 200 else None
-
-    # ── CES ──────────────────────────────────────────────────────────────
-    tf = 1.0
-    if cur_price > sma50_val: tf += 0.3
-    if cur_rsi   > 55:        tf += 0.2
-    raw_ces   = (upside / volatility) * tf if volatility else 0
-    ces_score = round(min(max(raw_ces * 20, 0), 100), 1)
-
-    if   ces_score > 80: ces_lbl = "High Conviction"; ces_col = "#10b981"
-    elif ces_score > 60: ces_lbl = "Strong Setup";    ces_col = "#22c55e"
-    elif ces_score > 40: ces_lbl = "Moderate";        ces_col = "#f59e0b"
-    else:                ces_lbl = "High Risk";       ces_col = "#ef4444"
-
-    # ── Technical Score (0–100) ───────────────────────────────────────────
-    pts = 0
-    if   cur_rsi < 30:  pts += 25
-    elif cur_rsi < 50:  pts += 20
-    elif cur_rsi < 60:  pts += 12
-    else:               pts +=  5
-    if macd_signal == "BUY" and cur_hist > 0: pts += 22
-    elif macd_signal == "BUY":               pts += 14
-    else:                                    pts +=  5
-    if   bb_pct < 20:   pts += 22
-    elif bb_pct < 40:   pts += 14
-    else:               pts +=  5
-    if   rr > 2.0:      pts += 20
-    elif rr > 1.2:      pts += 13
-    else:               pts +=  5
-    if cur_price > sma50_val: pts += 6
-    if sma200_val and cur_price > sma200_val: pts += 5
-    tech_score = min(pts, 100)
-
-    # ── Fundamentals ─────────────────────────────────────────────────────
-    def fv(k, mult=1, suf=""):
-        v = info.get(k)
-        if v is None or v == "N/A": return "N/A"
-        try: return f"{round(float(v)*mult,2)}{suf}"
-        except: return str(v)
-
-    pe_val   = fv('trailingPE')
-    pb_val   = fv('priceToBook')
-    roe_val  = fv('returnOnEquity', 100, '%')
-    de_val   = fv('debtToEquity')
-    mcap     = info.get('marketCap', 0) or 0
-    mcap_cr  = f"₹{round(mcap/1e7):,} Cr" if mcap else "N/A"
-    div_yld  = fv('dividendYield', 100, '%')
-
-    # ── Verdict ───────────────────────────────────────────────────────────
-    if tech_score >= 65 and rr >= 1.2:
-        verdict    = "✅ STRONG BUY"
-        v_css      = "vb-buy"
-        v_color    = "#10b981"
-        hold_days  = 90
-        sci_reason = (
-            f"The stock scores {tech_score}/100 on our composite technical model. "
-            f"RSI at {cur_rsi} indicates {'an oversold reversal opportunity' if cur_rsi < 45 else 'healthy momentum without being overbought'}. "
-            f"MACD is {'bullish — histogram positive, showing rising momentum' if macd_signal=='BUY' and cur_hist>0 else 'approaching a bullish crossover'}. "
-            f"Bollinger Band %B at {bb_pct}% {'shows price near the lower band — statistically high probability of bounce' if bb_pct<30 else 'shows price in the middle zone'}. "
-            f"Risk-reward of {rr} means for every ₹1 at risk, there is ₹{rr} potential upside. "
-            f"With ₹{investment_amount:,} you can buy {shares} shares. "
-            f"Suggested hold: {hold_days} days."
-        )
-        why_buy  = f"Strong entry signal: RSI={cur_rsi}, MACD={macd_signal}, R:R={rr}, Tech Score={tech_score}/100."
-        why_sell = f"Exit target: ₹{round(w52_high*0.98,2)} (near 52-week high). Set stop-loss at ₹{round(cur_price*0.92,2)} (-8%)."
-        why_hold = f"Hold for {hold_days} days. Review if RSI crosses 70 or MACD turns negative."
-
-    elif tech_score >= 45 or rr >= 1.0:
-        verdict    = "🟡 ACCUMULATE / HOLD"
-        v_css      = "vb-hold"
-        v_color    = "#f59e0b"
-        hold_days  = 180
-        sci_reason = (
-            f"Mixed signals — technical score {tech_score}/100. "
-            f"RSI at {cur_rsi} is {'neutral, awaiting direction' if 40 < cur_rsi < 60 else 'elevated — avoid chasing at this level'}. "
-            f"MACD is {macd_signal} but conviction is moderate. "
-            f"Bollinger %B at {bb_pct}% places price in the {'middle zone — no clear edge' if 25 < bb_pct < 75 else 'extreme zone'}. "
-            f"R:R of {rr} is marginal. Wait for RSI to dip below 45 or MACD crossover for a stronger entry. "
-            f"Accumulate in small tranches if fundamentals are sound."
-        )
-        why_buy  = f"Partial entry only. Wait for RSI < 45 or MACD bullish cross before full position."
-        why_sell = f"Do not buy at current price if RSI > 65. Sell if RSI > 72 and MACD turns negative."
-        why_hold = f"SIP-style accumulation recommended. Review every 30 days."
-
+def get_voice_lang_code():
+    vl = st.session_state.get("voice_lang", "🇧🇩 Bengali (bn-BD)")
+    if "Bengali" in vl:
+        return "bn-BD"
+    elif "English" in vl:
+        return "en-US"
     else:
-        verdict    = "🔴 AVOID / WATCH"
-        v_css      = "vb-sell"
-        v_color    = "#ef4444"
-        hold_days  = 0
-        sci_reason = (
-            f"Weak technical setup — score {tech_score}/100. "
-            f"RSI at {cur_rsi} {'is overbought — high risk of correction' if cur_rsi > 65 else 'shows weak momentum'}. "
-            f"MACD is bearish ({macd_signal}). "
-            f"R:R of {rr} does not justify entry — downside risk ({downside}%) outweighs upside ({upside}%). "
-            f"Bollinger %B at {bb_pct}% {'near upper band — selling pressure likely' if bb_pct > 70 else 'weak structure'}. "
-            f"Avoid new positions. Set a watchlist alert for RSI < 40."
-        )
-        why_buy  = f"Do NOT buy currently. Wait for RSI < 40 and MACD bullish crossover."
-        why_sell = f"If already holding, consider partial exit above ₹{round(cur_price*1.05,2)} (+5%)."
-        why_hold = f"Watchlist only. Re-evaluate when Tech Score > 55."
+        return "bn-BD"
 
-    # ── Profit projection ────────────────────────────────────────────────
-    monthly_ret = float(close.pct_change(21).mean())
-    monthly_ret = max(min(monthly_ret, 0.07), -0.04)
-    projections = []
-    for days, lbl in [(30,"1 Month"),(90,"3 Months"),(180,"6 Months"),(365,"1 Year"),(730,"2 Years")]:
-        m = days / 30
-        pp  = round(cur_price * ((1 + monthly_ret) ** m), 2)
-        pct = round(((pp - cur_price) / cur_price) * 100, 2)
-        inv = int(investment_amount * (1 + pct/100))
-        projections.append((lbl, pp, pct, inv))
+# ── SIDEBAR ──────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## ✦ SANJU Settings")
+    st.markdown("---")
 
-    # ── AI note ──────────────────────────────────────────────────────────
-    ai_note_text = (
-        f"<b>RSI ({cur_rsi}):</b> {'🟢 Oversold — strong reversal candidate.' if cur_rsi<35 else '🟡 Neutral zone — awaiting directional confirmation.' if cur_rsi<60 else '🔴 Overbought — avoid chasing, wait for pullback.'}<br>"
-        f"<b>MACD ({macd_signal}):</b> {'🟢 Bullish crossover — momentum accelerating.' if macd_signal=='BUY' and cur_hist>0 else '🟡 Nearing bullish cross — monitor daily.' if macd_signal=='BUY' else '🔴 Bearish — selling pressure dominant.'}<br>"
-        f"<b>Bollinger %B ({bb_pct}%):</b> {'🟢 Near lower band — statistically likely to bounce.' if bb_pct<25 else '🔴 Near upper band — caution, possible reversal.' if bb_pct>75 else '🟡 Mid-band — no edge, wait for breakout.'}<br>"
-        f"<b>Volume:</b> {'🟢 Above average — smart money accumulating.' if vol_signal=='HIGH' else '🔴 Below average — no institutional interest.' if vol_signal=='LOW' else '🟡 Normal volume — inconclusive.'}<br>"
-        f"<b>Risk-Reward ({rr}):</b> {'🟢 Excellent — favorable entry.' if rr>1.5 else '🟡 Marginal — wait for better entry.' if rr>1.0 else '🔴 Poor — downside risk too high.'}"
+    model_name  = st.selectbox("⚡ MODEL", ["mistral-small-2506", "mistral-medium-2505", "mistral-large-latest"])
+    temperature = st.slider("🌡️ TEMPERATURE", 0.0, 1.0, 0.7, 0.05)
+    max_tokens  = st.slider("📏 MAX TOKENS", 256, 4096, 1024, 64)
+
+    st.markdown("---")
+    st.markdown("### 🌐 LANGUAGE")
+    lang_mode = st.selectbox("Reply Language", ["🤖 Auto Detect", "🇧🇩 Always Bengali", "🇬🇧 Always English"])
+
+    st.markdown("---")
+    st.markdown("### 🔊 VOICE SETTINGS")
+    st.session_state["tts_enabled"] = st.toggle("🔊 Speak AI Replies (TTS)", value=st.session_state["tts_enabled"])
+    st.session_state["voice_lang"]  = st.selectbox(
+        "🎤 Voice Input Language",
+        ["🇧🇩 Bengali (bn-BD)", "🇬🇧 English (en-US)", "🌐 Auto (bn-BD)"],
+        index=["🇧🇩 Bengali (bn-BD)", "🇬🇧 English (en-US)", "🌐 Auto (bn-BD)"].index(st.session_state["voice_lang"])
+              if st.session_state["voice_lang"] in ["🇧🇩 Bengali (bn-BD)", "🇬🇧 English (en-US)", "🌐 Auto (bn-BD)"] else 0
     )
 
-    # ═══════════════════════════════════════════════════════════════
-    #  DISPLAY
-    # ═══════════════════════════════════════════════════════════════
-
-    # ── Row 1: 6 metric cards ─────────────────────────────────────────────
-    st.markdown("### 📊 Live Market Overview")
-    r1c = st.columns(6)
-    cards_r1 = [
-        ("💰 Price",     f"₹{cur_price}",  "mc-g", f"ATR ₹{atr14}"),
-        ("📊 RSI (14)",  cur_rsi,           "mc-y" if 40<cur_rsi<60 else "mc-g" if cur_rsi<=40 else "mc-r", "OB>70 | OS<30"),
-        ("📈 MACD",      macd_signal,        "mc-g" if macd_signal=="BUY" else "mc-r", f"Hist {cur_hist:+.2f}"),
-        ("🎯 Tech Score",f"{tech_score}/100","mc-g" if tech_score>=65 else "mc-y" if tech_score>=45 else "mc-r", "Buy≥65 | Watch<45"),
-        ("⚡ CES",        f"{ces_score}/100", f"mc-{'g' if ces_score>60 else 'y' if ces_score>40 else 'r'}", ces_lbl),
-        ("📦 Shares",    f"{shares}",        "mc-p", f"@ ₹{cur_price}"),
-    ]
-    for col, (lbl, val, cls, hint) in zip(r1c, cards_r1):
-        col.markdown(f"""<div class="mc {cls}">
-            <div class="mc-label">{lbl}</div>
-            <div class="mc-val">{val}</div>
-            <div class="mc-hint">{hint}</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
-    # ── Row 2: 6 metric cards ─────────────────────────────────────────────
-    r2c = st.columns(6)
-    cards_r2 = [
-        ("🏔️ 52W High",  f"₹{w52_high}",  "mc-r",  f"{round(((cur_price-w52_high)/w52_high)*100,1)}% from high"),
-        ("🏖️ 52W Low",   f"₹{w52_low}",   "mc-g",  f"+{round(((cur_price-w52_low)/w52_low)*100,1)}% from low"),
-        ("⚖️ R:R Ratio", f"{rr}",          "mc-g" if rr>1.2 else "mc-r", f"Up {upside}% / Dn {downside}%"),
-        ("📉 Volatility",f"{volatility}%", "mc-o",  "Daily std dev"),
-        ("🎸 BB %B",     f"{bb_pct}%",     "mc-g" if bb_pct<25 else "mc-r" if bb_pct>75 else "mc-b", "OS<25 | OB>75"),
-        ("🔊 Volume",    vol_signal,        "mc-g" if vol_signal=="HIGH" else "mc-y" if vol_signal=="NORMAL" else "mc-r", "vs 20D avg"),
-    ]
-    for col, (lbl, val, cls, hint) in zip(r2c, cards_r2):
-        col.markdown(f"""<div class="mc {cls}">
-            <div class="mc-label">{lbl}</div>
-            <div class="mc-val">{val}</div>
-            <div class="mc-hint">{hint}</div>
-        </div>""", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 🎭 PERSONA")
+    persona = st.selectbox("Choose Persona", ["🧠 Smart Assistant","💻 Code Expert","✍️ Creative Writer","🔬 Research Analyst","😄 Funny Friend","🔧 Custom"])
+    persona_map = {
+        "🧠 Smart Assistant": "You are SANJU, a highly intelligent AI assistant. Be concise and insightful.",
+        "💻 Code Expert":     "You are SANJU, an elite software engineer. Provide clean code with clear explanations.",
+        "✍️ Creative Writer": "You are SANJU, a brilliant creative writer. Be vivid, imaginative, emotionally resonant.",
+        "🔬 Research Analyst":"You are SANJU, a meticulous research analyst. Be thorough and structure info clearly.",
+        "😄 Funny Friend":    "You are SANJU, witty and funny. Add humor and keep things light.",
+        "🔧 Custom":          "",
+    }
+    if persona == "🔧 Custom":
+        system_prompt = st.text_area("✏️ SYSTEM PROMPT", value="You are SANJU, an advanced AI assistant.", height=100)
+    else:
+        system_prompt = persona_map[persona]
+        st.markdown(f"<div style='background:rgba(245,166,35,.05);border:1px solid rgba(245,166,35,.15);border-radius:10px;padding:10px 12px;font-size:.65rem;font-family:\"Space Mono\",monospace;color:#555;line-height:1.7;'>{system_prompt}</div>", unsafe_allow_html=True)
 
     st.markdown("---")
-
-    # ── VERDICT + FUNDAMENTALS ────────────────────────────────────────────
-    vc, fc = st.columns([3, 1])
-
-    with vc:
-        st.markdown(f"""
-        <div class="verdict-banner {v_css}">
-            <div class="vb-tag">🤖 AI VERDICT — {symbol.upper()}</div>
-            <div class="vb-main">{verdict}</div>
-            <div class="vb-reason">{sci_reason}</div>
-            {"<div class='vb-hold-line'>⏱ Suggested Hold Period: " + str(hold_days) + " Days</div>" if hold_days else ""}
-        </div>""", unsafe_allow_html=True)
-
-    with fc:
-        st.markdown(f"""
-        <div class="mc mc-b" style="padding:18px;text-align:left">
-            <div class="mc-label" style="text-align:center;margin-bottom:14px">🏢 FUNDAMENTALS</div>
-            <div class="ir" style="border-left-color:#00D9F5"><span class="ir-name">P/E Ratio</span><span class="ir-val" style="color:#00D9F5">{pe_val}</span></div>
-            <div class="ir" style="border-left-color:#a78bfa"><span class="ir-name">P/B Ratio</span><span class="ir-val" style="color:#a78bfa">{pb_val}</span></div>
-            <div class="ir" style="border-left-color:#00F5A0"><span class="ir-name">ROE</span><span class="ir-val" style="color:#00F5A0">{roe_val}</span></div>
-            <div class="ir" style="border-left-color:#f97316"><span class="ir-name">Debt/Equity</span><span class="ir-val" style="color:#f97316">{de_val}</span></div>
-            <div class="ir" style="border-left-color:#FACC15"><span class="ir-name">Market Cap</span><span class="ir-val" style="color:#FACC15">{mcap_cr}</span></div>
-            <div class="ir" style="border-left-color:#34d399"><span class="ir-name">Div. Yield</span><span class="ir-val" style="color:#34d399">{div_yld}</span></div>
-        </div>""", unsafe_allow_html=True)
+    msg_count  = len(st.session_state.messages)
+    user_count = sum(1 for r, *_ in st.session_state.messages if r == "user")
+    avg_rt     = sum(st.session_state.response_times) / len(st.session_state.response_times) if st.session_state.response_times else 0
+    st.markdown(f"<div style='font-family:\"Space Mono\",monospace;font-size:.65rem;color:#3a3a60;'><div style='margin-bottom:8px;display:flex;justify-content:space-between;'><span>💬 MESSAGES</span><span style='color:#f5a623;font-weight:700;'>{msg_count}</span></div><div style='margin-bottom:8px;display:flex;justify-content:space-between;'><span>👤 TURNS</span><span style='color:#f5a623;font-weight:700;'>{user_count}</span></div><div style='display:flex;justify-content:space-between;'><span>⚡ AVG</span><span style='color:#2dd4bf;font-weight:700;'>{avg_rt:.1f}s</span></div></div>", unsafe_allow_html=True)
 
     st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🗑️ Clear"):
+            for k in ["messages","response_times","search_history","pending_file","pending_file_name","pending_file_type"]:
+                st.session_state[k] = [] if k in ["messages","response_times","search_history"] else (None if k == "pending_file" else "")
+            st.rerun()
+    with c2:
+        if st.session_state.messages:
+            st.download_button("📄 Export", data=export_markdown().encode("utf-8"), file_name="sanju_chat.md", mime="text/markdown")
 
-    # ── AI NOTE ───────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div class="ai-note">
-        <div class="ai-note-hd">🤖 AI Analyst Note — Signal Breakdown</div>
-        <div class="ai-note-bd">{ai_note_text}</div>
+# ── MAIN ─────────────────────────────────────────────
+main_col, _ = st.columns([1, 0.001])
+with main_col:
+
+    # HEADER
+    st.markdown("""<div class='sanju-header'>
+        <div class='sanju-emblem'><div class='sanju-emblem-ring'></div><div class='sanju-emblem-inner'>✦</div></div>
+        <div class='sanju-wordmark'>
+            <div class='sanju-name'>SAN<em>JU</em></div>
+            <div style='font-size:1rem;font-weight:600;letter-spacing:-.5px;margin-top:2px;color:#a0a0c0;'><em style='color:#f5a623;font-style:normal;'>Empowering</em> Ideas Through <em style='color:#f5a623;font-style:normal;'>Intelligence</em></div>
+        </div>
+        <div class='online-pill'><div class='online-dot'></div>ONLINE</div>
     </div>""", unsafe_allow_html=True)
 
-    # ── WHY BUY / SELL / HOLD ─────────────────────────────────────────────
-    wb, ws, wh = st.columns(3)
-    wb.markdown(f"""<div class="sc sc-buy">
-        <div class="sc-label">Why Buy?</div>
-        <div class="sc-val">📈</div>
-        <div class="sc-hint" style="font-size:12px;color:#d1d5db;line-height:1.6">{why_buy}</div>
-    </div>""", unsafe_allow_html=True)
-    ws.markdown(f"""<div class="sc sc-sell">
-        <div class="sc-label">When to Sell?</div>
-        <div class="sc-val">💰</div>
-        <div class="sc-hint" style="font-size:12px;color:#d1d5db;line-height:1.6">{why_sell}</div>
-    </div>""", unsafe_allow_html=True)
-    wh.markdown(f"""<div class="sc sc-sig">
-        <div class="sc-label">Hold Strategy</div>
-        <div class="sc-val">⏱</div>
-        <div class="sc-hint" style="font-size:12px;color:#d1d5db;line-height:1.6">{why_hold}</div>
-    </div>""", unsafe_allow_html=True)
+    # ── TTS PLAYER (runs after rerun, visible height so browser allows audio) ──
+    if st.session_state.get("tts_pending") and st.session_state.get("tts_enabled", True):
+        _tts_text = st.session_state["tts_pending"]
+        _tts_lang = st.session_state.get("tts_lang_pending", "en-US")
+        # Escape for JS
+        _tts_text = _tts_text.replace("\\", "\\\\").replace("`", "'").replace('\n', ' ').replace('"', "'")
+        _tts_text = _tts_text[:600]  # limit length
+        _tts_html = f"""
+        <div id="ttsBox" style="background:rgba(45,212,191,0.06);border:1px solid rgba(45,212,191,0.2);border-radius:10px;padding:8px 16px;font-family:'Space Mono',monospace;font-size:.6rem;color:#2dd4bf;letter-spacing:2px;display:flex;align-items:center;gap:10px;">
+            <span style="animation:blinkDot 1s infinite;display:inline-block;width:6px;height:6px;background:#2dd4bf;border-radius:50%;"></span>
+            <span id="ttsLabel">🔊 SPEAKING...</span>
+            <button onclick="window.speechSynthesis.cancel();document.getElementById('ttsBox').style.opacity='0.3';document.getElementById('ttsLabel').textContent='⏹ STOPPED';" style="background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.3);border-radius:6px;color:#ef4444;font-size:.55rem;padding:2px 8px;cursor:pointer;font-family:'Space Mono',monospace;">STOP</button>
+        </div>
+        <script>
+        (function() {{
+            function speakNow() {{
+                window.speechSynthesis.cancel();
+                const u = new SpeechSynthesisUtterance(`{_tts_text}`);
+                u.lang = '{_tts_lang}';
+                u.rate = 1.0;
+                u.pitch = 1.0;
+                u.volume = 1.0;
+                u.onend = function() {{
+                    const box = document.getElementById('ttsBox');
+                    if (box) {{ box.style.opacity = '0.4'; document.getElementById('ttsLabel').textContent = '✔ DONE'; }}
+                }};
+                u.onerror = function(e) {{
+                    const box = document.getElementById('ttsBox');
+                    if (box) document.getElementById('ttsLabel').textContent = '❌ TTS ERROR: ' + e.error;
+                }};
+                window.speechSynthesis.speak(u);
+            }}
+            if (document.readyState === 'complete') {{
+                setTimeout(speakNow, 300);
+            }} else {{
+                window.addEventListener('load', () => setTimeout(speakNow, 300));
+            }}
+        }})();
+        </script>
+        """
+        components.html(_tts_html, height=50)
+        st.session_state["tts_pending"] = None
 
-    st.markdown("---")
-
-    # ── PRICE ACTION ──────────────────────────────────────────────────────
-    st.markdown("### 🎯 Price Action Strategy")
-    target_px   = round(w52_high * 0.98, 2)
-    buy_zone_px = round(w52_low  * 1.05, 2)
-    stoploss_px = round(cur_price * 0.92, 2)
-
-    sig_val = "SELL — Near Target" if cur_price >= target_px else \
-              "BUY — Support Zone" if cur_price <= buy_zone_px else "HOLD / ACCUMULATE"
-
-    pa1, pa2, pa3, pa4 = st.columns(4)
-    for col, cls, lbl, val, hint in [
-        (pa1,"sc-sell","🎯 Target (Sell)",  f"₹{target_px}",   "98% of 52W high"),
-        (pa2,"sc-buy", "🛒 Buy Zone",       f"₹{buy_zone_px}", "5% above 52W low"),
-        (pa3,"sc-sell","🛑 Stop-Loss",      f"₹{stoploss_px}", "-8% from current"),
-        (pa4,"sc-sig", "📡 Live Signal",    sig_val,            f"Price: ₹{cur_price}"),
-    ]:
-        col.markdown(f"""<div class="sc {cls}">
-            <div class="sc-label">{lbl}</div>
-            <div class="sc-val">{val}</div>
-            <div class="sc-hint">{hint}</div>
+    # STATS
+    if st.session_state.messages:
+        sm = model_name.replace("mistral-","").replace("-latest","").upper()
+        st.markdown(f"""<div class='stats-bar'>
+            <div class='stat-item'><div class='stat-label'>MODEL</div><div class='stat-value'>{sm}</div></div>
+            <div class='stat-item'><div class='stat-label'>TEMP</div><div class='stat-value'>{temperature}</div></div>
+            <div class='stat-item'><div class='stat-label'>MSGS</div><div class='stat-value'>{msg_count}</div></div>
+            <div class='stat-item'><div class='stat-label'>LANG</div><div class='stat-value'>{lang_mode.split()[0]}</div></div>
+            <div class='stat-item'><div class='stat-label'>AVG</div><div class='stat-value'>{avg_rt:.1f}s</div></div>
         </div>""", unsafe_allow_html=True)
 
-    st.markdown("---")
-
-    # ── FULL CHART ────────────────────────────────────────────────────────
-    st.markdown("### 📈 Live Technical Chart")
-    fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True,
-        row_heights=[0.50, 0.18, 0.18, 0.14],
-        vertical_spacing=0.025,
-        subplot_titles=(f"{symbol} — Candlestick + BB + SMA", "RSI (14)", "MACD", "Volume")
-    )
-
-    fig.add_trace(go.Candlestick(
-        x=data.index, open=open_s, high=high_s, low=low_s, close=close,
-        increasing_line_color='#00F5A0', decreasing_line_color='#ef4444',
-        name="Price"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=data.index, y=sma50,  line=dict(color='#FACC15',width=1.5,dash='dot'), name="SMA 50"),  row=1, col=1)
-    fig.add_trace(go.Scatter(x=data.index, y=sma200, line=dict(color='#a78bfa',width=1.5,dash='dot'), name="SMA 200"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=data.index, y=bb_up,  line=dict(color='rgba(0,217,245,0.5)',width=1),  name="BB Up",   showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=data.index, y=bb_dn,  line=dict(color='rgba(0,217,245,0.5)',width=1),  name="BB Low",
-        fill='tonexty', fillcolor='rgba(0,217,245,0.04)', showlegend=False), row=1, col=1)
-
-    fig.add_trace(go.Scatter(x=data.index, y=rsi, line=dict(color='#FACC15',width=2), name="RSI"), row=2, col=1)
-    fig.add_hline(y=70, line_dash="dash", line_color="#ef4444", line_width=1, row=2, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="#10b981", line_width=1, row=2, col=1)
-
-    h_colors = ['#00F5A0' if v >= 0 else '#ef4444' for v in macd_hist]
-    fig.add_trace(go.Bar(x=data.index, y=macd_hist, marker_color=h_colors, name="Histogram", showlegend=False), row=3, col=1)
-    fig.add_trace(go.Scatter(x=data.index, y=macd_line,   line=dict(color='#00D9F5',width=1.5), name="MACD"),   row=3, col=1)
-    fig.add_trace(go.Scatter(x=data.index, y=signal_line, line=dict(color='#f97316', width=1.5), name="Signal"), row=3, col=1)
-
-    v_colors = ['#00F5A0' if float(close.iloc[i]) >= float(close.iloc[i-1]) else '#ef4444' for i in range(len(close))]
-    fig.add_trace(go.Bar(x=data.index, y=volume, marker_color=v_colors, name="Volume", showlegend=False), row=4, col=1)
-
-    fig.update_layout(
-        height=780, template="plotly_dark",
-        paper_bgcolor='#0a0e17', plot_bgcolor='#0a0e17',
-        font=dict(color='#6b7280', size=11),
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right",
-                    bgcolor='rgba(0,0,0,0)', font=dict(size=11)),
-        margin=dict(l=10,r=10,t=35,b=10)
-    )
-    for i in range(1, 5):
-        fig.update_xaxes(gridcolor='#1f2937', row=i, col=1)
-        fig.update_yaxes(gridcolor='#1f2937', row=i, col=1)
-    fig.update_yaxes(range=[0,100], row=2, col=1)
-
-    st.plotly_chart(fig, use_container_width=True, key="full_chart")
-    st.markdown("---")
-
-    # ── PROFIT PROJECTION ────────────────────────────────────────────────
-    st.markdown(f"### 💹 Profit Projection  *(Avg monthly return: {round(monthly_ret*100,2)}%)*")
-    pr_cols = st.columns(5)
-    for idx, (lbl, pp, pct, inv) in enumerate(projections):
-        color = "mc-g" if pct >= 0 else "mc-r"
-        arrow = "▲" if pct >= 0 else "▼"
-        pr_cols[idx].markdown(f"""<div class="mc {color}">
-            <div class="mc-label">{lbl}</div>
-            <div class="mc-val">₹{pp}</div>
-            <div class="mc-hint">{arrow} {abs(pct)}%</div>
-            <div style="font-size:11px;color:#4b5563;margin-top:4px">Inv → ₹{inv:,}</div>
+    # WELCOME
+    if not st.session_state.messages:
+        st.markdown("""<div class='welcome-wrap'>
+            <span class='welcome-logo'>✦</span>
+            <div class='welcome-title'>Hello, I'm SANJU</div>
+            <div class='welcome-sub'>Your Advanced AI Companion · Ready to Assist</div>
+            <div class='starters-label'>QUICK STARTERS — Click to send instantly</div>
         </div>""", unsafe_allow_html=True)
 
-    st.markdown("---")
+        presets = [
+            "✍️ Write a poem about space",
+            "💻 Explain async/await in Python",
+            "🔬 Summarize quantum computing",
+            "🎨 Give me 5 startup ideas",
+            "😄 Tell me a clever joke",
+            "🌍 Best travel tips for Japan",
+        ]
+        cols = st.columns(3)
+        for i, p in enumerate(presets):
+            with cols[i % 3]:
+                if st.button(p, key=f"preset_{i}"):
+                    st.session_state.preset_input = p
+                    st.session_state.auto_send = True
 
-    # ── INDICATOR TABLE ───────────────────────────────────────────────────
-    st.markdown("### 🔬 Full Indicator Summary")
-    ind_rows = [
-        ("RSI (14)",        cur_rsi,                 "#10b981" if cur_rsi<40 else "#f59e0b" if cur_rsi<60 else "#ef4444",
-         "🟢 Oversold" if cur_rsi<35 else "🟡 Neutral" if cur_rsi<60 else "🔴 Overbought"),
-        ("MACD Signal",     macd_signal,              "#10b981" if macd_signal=="BUY" else "#ef4444",
-         "🟢 Bullish" if macd_signal=="BUY" else "🔴 Bearish"),
-        ("MACD Histogram",  f"{cur_hist:+.2f}",       "#10b981" if cur_hist>=0 else "#ef4444",
-         "🟢 Rising" if cur_hist>=0 else "🔴 Falling"),
-        ("Bollinger %B",    f"{bb_pct}%",             "#10b981" if bb_pct<25 else "#ef4444" if bb_pct>75 else "#f59e0b",
-         "🟢 Oversold Zone" if bb_pct<25 else "🔴 Overbought Zone" if bb_pct>75 else "🟡 Neutral"),
-        ("SMA 50 vs Price", f"₹{sma50_val}",          "#10b981" if cur_price>sma50_val else "#ef4444",
-         "🟢 Price Above" if cur_price>sma50_val else "🔴 Price Below"),
-        ("SMA 200 vs Price",f"₹{sma200_val}" if sma200_val else "N/A", "#10b981" if sma200_val and cur_price>sma200_val else "#ef4444",
-         "🟢 Price Above" if sma200_val and cur_price>sma200_val else "🔴 Price Below" if sma200_val else "⚪ Need Data"),
-        ("Volume Trend",    vol_signal,               "#10b981" if vol_signal=="HIGH" else "#f59e0b" if vol_signal=="NORMAL" else "#ef4444",
-         "🟢 Strong" if vol_signal=="HIGH" else "🟡 Normal" if vol_signal=="NORMAL" else "🔴 Weak"),
-        ("Risk-Reward",     f"{rr}",                  "#10b981" if rr>1.5 else "#f59e0b" if rr>1.0 else "#ef4444",
-         "🟢 Excellent" if rr>1.5 else "🟡 Moderate" if rr>1.0 else "🔴 Poor"),
-        ("ATR (14)",        f"₹{atr14}",              "#a78bfa", "📊 Daily Range"),
-        ("Tech Score",      f"{tech_score}/100",      "#10b981" if tech_score>=65 else "#f59e0b" if tech_score>=45 else "#ef4444",
-         "🟢 Strong" if tech_score>=65 else "🟡 Moderate" if tech_score>=45 else "🔴 Weak"),
-        ("CES Score",       f"{ces_score}/100",       ces_col,   f"⚡ {ces_lbl}"),
-    ]
+    # CHAT HISTORY
+    for idx, item in enumerate(st.session_state.messages):
+        role, content = item[0], item[1]
+        attach_meta = item[2] if len(item) > 2 else None
+        lang_used   = item[3] if len(item) > 3 else "EN"
+        img_bytes   = item[4] if len(item) > 4 else None
 
-    half = len(ind_rows) // 2 + 1
-    tc1, tc2 = st.columns(2)
-    for col, chunk in [(tc1, ind_rows[:half]), (tc2, ind_rows[half:])]:
-        with col:
-            for name, val, bcolor, status in chunk:
-                st.markdown(f"""<div class="ir" style="border-left-color:{bcolor}">
-                    <span class="ir-name">{name}</span>
-                    <span class="ir-val">{val}</span>
-                    <span class="ir-status" style="color:{bcolor}">{status}</span>
+        if role == "user":
+            ab = f"<div class='attach-badge'>📎 {attach_meta['name']}</div>" if attach_meta else ""
+            st.markdown(f"""<div class='msg-wrap user-wrap'>
+                <div class='av av-user'>👤</div>
+                <div class='bubble bubble-user'>
+                    <div class='bubble-meta'>YOU</div>
+                    {ab}{content}
+                </div>
+            </div>""", unsafe_allow_html=True)
+        elif lang_used == "IMG" and img_bytes:
+            st.markdown(f"""<div class='msg-wrap'>
+                <div class='av av-ai'>✦</div>
+                <div style='flex:1;max-width:72%;'>
+                <div style='font-family:"Space Mono",monospace;font-size:.52rem;color:#5a5a80;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;'>
+                    <span style='width:4px;height:4px;background:#f5a623;border-radius:50%;display:inline-block;margin-right:8px;'></span>
+                    SANJU · IMAGE GENERATION
+                </div>
+                <div style='font-family:"Space Mono",monospace;font-size:.6rem;color:#f5a623;margin-bottom:8px;'>
+                    🎨 {content[:80]}
                 </div>""", unsafe_allow_html=True)
+            st.image(img_bytes, width=480)
+            st.download_button(
+                label="⬇️ Download Image",
+                data=img_bytes,
+                file_name=f"sanju_generated_{idx}.jpg",
+                mime="image/jpeg",
+                key=f"dl_{idx}"
+            )
+            st.markdown("</div></div>", unsafe_allow_html=True)
+        else:
+            badge = "<span class='lang-badge'>বাংলা</span>" if lang_used == "BN" else ""
+            st.markdown(f"""<div class='msg-wrap'>
+                <div class='av av-ai'>✦</div>
+                <div class='bubble bubble-ai'>
+                    <div class='bubble-meta'><span class='bubble-meta-dot'></span>SANJU · {model_name}{badge}</div>
+                    {content}
+                </div>
+            </div>""", unsafe_allow_html=True)
 
-    st.markdown("---")
+    # SEARCH HISTORY
+    top = get_top_searches(6)
+    if top:
+        st.markdown("<div class='history-label' style='margin-top:10px;'>🕐 FREQUENT SEARCHES — Click to send</div>", unsafe_allow_html=True)
+        hcols = st.columns(min(len(top), 3))
+        for i, q in enumerate(top):
+            with hcols[i % 3]:
+                lbl = q[:25] + "..." if len(q) > 28 else q
+                if st.button(f"↺ {lbl}", key=f"h_{i}_{hash(q)%9999}"):
+                    st.session_state.preset_input = q
+                    st.session_state.auto_send = True
 
-    # ═══════════════════════════════════════════════════════════════
-    #  PDF REPORT
-    # ═══════════════════════════════════════════════════════════════
-    pdf_fn = f"{symbol.replace('.','_')}_Report.pdf"
-    doc    = SimpleDocTemplate(pdf_fn, rightMargin=45, leftMargin=45,
-                               topMargin=40, bottomMargin=40)
-    S      = getSampleStyleSheet()
+    # FILE UPLOAD
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    with st.expander("📎 Attach Image or PDF (like ChatGPT)"):
+        uploaded = st.file_uploader(
+            "Image (PNG/JPG) or PDF", type=["png","jpg","jpeg","pdf"],
+            key="fu", label_visibility="collapsed"
+        )
+        if uploaded:
+            fb = uploaded.read()
+            ft = uploaded.type
+            fn = uploaded.name
+            b64 = base64.b64encode(fb).decode("utf-8")
+            if "image" in ft:
+                st.session_state.pending_file = {"b64": b64, "mime": ft, "bytes": fb, "text": None}
+                st.session_state.pending_file_type = "image"
+                st.image(fb, caption=f"✅ {fn}", width=200)
+                st.session_state.pending_file_name = fn
+            elif "pdf" in ft:
+                extracted_text = ""
+                try:
+                    import fitz
+                    doc = fitz.open(stream=fb, filetype="pdf")
+                    parts = []
+                    for i, page in enumerate(doc):
+                        parts.append("--- Page " + str(i+1) + " ---\n" + page.get_text())
+                    extracted_text = "\n\n".join(parts)
+                    doc.close()
+                except Exception:
+                    pass
+                if not extracted_text.strip():
+                    try:
+                        import pypdf
+                        reader = pypdf.PdfReader(io.BytesIO(fb))
+                        parts = []
+                        for i, page in enumerate(reader.pages):
+                            parts.append("--- Page " + str(i+1) + " ---\n" + (page.extract_text() or ""))
+                        extracted_text = "\n\n".join(parts)
+                    except Exception:
+                        pass
+                st.session_state.pending_file = {"b64": b64, "mime": ft, "bytes": fb, "text": extracted_text}
+                st.session_state.pending_file_type = "pdf"
+                st.session_state.pending_file_name = fn
+                if extracted_text.strip():
+                    wc = len(extracted_text.split())
+                    st.success(f"✅ PDF Ready: {fn} ({wc} words extracted)")
+                else:
+                    st.error("❌ Could not extract text. Run: pip install pymupdf")
 
-    title_s  = ParagraphStyle('T', parent=S['Title'],  fontSize=20, spaceAfter=6,  textColor=colors.HexColor('#000000'))
-    h1_s     = ParagraphStyle('H1',parent=S['Heading1'],fontSize=14, spaceAfter=4,  textColor=colors.HexColor('#1a3c6e'))
-    h2_s     = ParagraphStyle('H2',parent=S['Heading2'],fontSize=12, spaceAfter=3,  textColor=colors.HexColor('#2e5e9e'))
-    body_s   = ParagraphStyle('B', parent=S['Normal'], fontSize=10, spaceAfter=3,  leading=15)
-    verdict_s= ParagraphStyle('V', parent=S['Normal'], fontSize=13, spaceAfter=6,  fontName='Helvetica-Bold',
-                               textColor=colors.HexColor('#0a4d2e' if 'BUY' in verdict else '#7a3e00' if 'HOLD' in verdict else '#5e0000'))
-    small_s  = ParagraphStyle('S', parent=S['Normal'], fontSize=9,  spaceAfter=2,  textColor=colors.HexColor('#555555'))
+    if st.session_state.pending_file:
+        st.markdown(f"<div class='attach-badge'>📎 Ready: {st.session_state.pending_file_name}</div>", unsafe_allow_html=True)
 
-    elems = []
-    elems.append(Paragraph(f"AI Stock Intelligence Report", title_s))
-    elems.append(Paragraph(f"{symbol.upper()}  |  {pd.Timestamp.now().strftime('%d %b %Y, %H:%M')}", body_s))
-    elems.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#1a3c6e')))
-    elems.append(Spacer(1, 0.15*inch))
+    # ── VOICE INPUT via st.audio_input (native Streamlit — no iframe issue) ──
+    voice_lang_code = get_voice_lang_code()
 
-    # ── Verdict block ──
-    elems.append(Paragraph("AI VERDICT", h1_s))
-    clean_v = verdict.replace("✅","[BUY]").replace("🟡","[HOLD]").replace("🔴","[SELL]")
-    elems.append(Paragraph(clean_v, verdict_s))
-    elems.append(Paragraph(sci_reason, body_s))
-    elems.append(Spacer(1, 0.1*inch))
-
-    # ── Why Buy / Sell / Hold ──
-    elems.append(Paragraph("INVESTMENT GUIDANCE", h2_s))
-    elems.append(Paragraph(f"<b>Why Buy:</b> {why_buy}", body_s))
-    elems.append(Paragraph(f"<b>When to Sell:</b> {why_sell}", body_s))
-    elems.append(Paragraph(f"<b>Hold Strategy:</b> {why_hold}", body_s))
-    elems.append(Spacer(1, 0.1*inch))
-
-    # ── Key numbers ──
-    elems.append(Paragraph("KEY NUMBERS", h2_s))
-    for line in [
-        f"Current Price: Rs.{cur_price}  |  Shares: {shares}  |  Investment: Rs.{investment_amount:,}",
-        f"52W High: Rs.{w52_high}  |  52W Low: Rs.{w52_low}",
-        f"Target Price: Rs.{target_px}  |  Buy Zone: Rs.{buy_zone_px}  |  Stop-Loss: Rs.{stoploss_px}",
-        f"RSI: {cur_rsi}  |  MACD: {macd_signal}  |  BB%B: {bb_pct}%",
-        f"Tech Score: {tech_score}/100  |  CES: {ces_score}/100  |  R:R: {rr}",
-        f"Volatility: {volatility}%  |  ATR: Rs.{atr14}  |  Volume: {vol_signal}",
-    ]:
-        elems.append(Paragraph(f"• {line}", body_s))
-    elems.append(Spacer(1, 0.1*inch))
-
-    # ── Fundamentals ──
-    elems.append(Paragraph("FUNDAMENTALS", h2_s))
-    for line in [f"P/E: {pe_val}", f"P/B: {pb_val}", f"ROE: {roe_val}",
-                 f"Debt/Equity: {de_val}", f"Market Cap: {mcap_cr}", f"Dividend Yield: {div_yld}"]:
-        elems.append(Paragraph(f"• {line}", body_s))
-    elems.append(Spacer(1, 0.1*inch))
-
-    # ── Indicators ──
-    elems.append(Paragraph("INDICATOR SUMMARY", h2_s))
-    for name, val, _, status in ind_rows:
-        clean_s = status.replace("🟢","[OK]").replace("🔴","[WARN]").replace("🟡","[NEUTRAL]").replace("⚡","").replace("📊","").replace("⚪","[N/A]")
-        elems.append(Paragraph(f"• {name}: {val}  —  {clean_s}", body_s))
-    elems.append(Spacer(1, 0.1*inch))
-
-    # ── Profit projection ──
-    elems.append(Paragraph("PROFIT PROJECTION", h2_s))
-    elems.append(Paragraph(f"Based on historical avg monthly return of {round(monthly_ret*100,2)}%", small_s))
-    for lbl, pp, pct, inv in projections:
-        sign = "+" if pct >= 0 else ""
-        elems.append(Paragraph(f"• {lbl}: Rs.{pp}  ({sign}{pct}%)  →  Portfolio value: Rs.{inv:,}", body_s))
-    elems.append(Spacer(1, 0.15*inch))
-
-    elems.append(HRFlowable(width="100%", thickness=0.5, color=colors.grey))
-    elems.append(Paragraph(
-        "DISCLAIMER: This report is generated by an AI model for educational and research purposes only. "
-        "It does not constitute financial advice. Past performance is not indicative of future results. "
-        "Please consult a SEBI-registered investment advisor before making any investment decisions.",
-        small_s))
-
-    doc.build(elems)
-
-    with open(pdf_fn, "rb") as f:
-        st.download_button(
-            f"📥 Download Full AI Report — {symbol}",
-            f, file_name=pdf_fn, mime="application/pdf")
-
-    os.remove(pdf_fn)
-
-    st.markdown("""
-    <div style="text-align:center;color:#374151;font-size:11px;margin-top:16px;padding:12px;
-    border:1px solid #1f2937;border-radius:10px;background:#0d1117">
-    ⚠️ Disclaimer: For educational &amp; research purposes only. Not financial advice.
-    Always consult a SEBI-registered advisor before investing.
+    st.markdown("""<div style='font-family:"Space Mono",monospace;font-size:.56rem;color:#5a5a80;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;'>
+        🎤 VOICE INPUT — রেকর্ড করুন → Auto Transcribe → Send
     </div>""", unsafe_allow_html=True)
+
+    audio_col, info_col = st.columns([2, 3])
+    with audio_col:
+        audio_data = st.audio_input("🎤 Tap to Record", label_visibility="collapsed", key="voice_recorder")
+
+    with info_col:
+        if audio_data:
+            st.markdown("""<div style='background:rgba(45,212,191,.08);border:1px solid rgba(45,212,191,.25);border-radius:12px;padding:10px 14px;font-family:"Space Mono",monospace;font-size:.6rem;color:#2dd4bf;letter-spacing:1px;'>
+                ✔ Audio recorded! Transcribing...
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""<div style='background:rgba(124,92,191,.06);border:1px solid rgba(124,92,191,.2);border-radius:12px;padding:10px 14px;font-family:"Space Mono",monospace;font-size:.6rem;color:#7c5cbf;letter-spacing:1px;'>
+                🎤 Mic button click koro → বলুন → থামুন → Auto send
+            </div>""", unsafe_allow_html=True)
+
+    # Transcribe audio if newly recorded
+    if audio_data and id(audio_data) != st.session_state.get("last_audio_id"):
+        st.session_state["last_audio_id"] = id(audio_data)
+        transcribed = ""
+        err_msg = ""
+        try:
+            import io as _io
+            import wave
+            import struct
+            import tempfile, os
+
+            audio_data.seek(0)
+            raw_bytes = audio_data.read()
+
+            # Write to temp file and detect format
+            suffix = ".webm"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(raw_bytes)
+                tmp_path = tmp.name
+
+            wav_path = tmp_path.replace(".webm", ".wav")
+            converted = False
+
+            # Try ffmpeg (if installed)
+            ret = os.system(f'ffmpeg -y -i "{tmp_path}" -ar 16000 -ac 1 "{wav_path}" -loglevel quiet 2>nul')
+            if ret == 0 and os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000:
+                converted = True
+
+            # Try soundfile if ffmpeg failed
+            if not converted:
+                try:
+                    import soundfile as sf
+                    import numpy as np
+                    data, samplerate = sf.read(_io.BytesIO(raw_bytes))
+                    if data.ndim > 1:
+                        data = data[:, 0]
+                    data_int16 = (data * 32767).astype(np.int16)
+                    with wave.open(wav_path, 'wb') as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(samplerate)
+                        wf.writeframes(data_int16.tobytes())
+                    converted = True
+                except Exception:
+                    pass
+
+            # Try pydub if others failed
+            if not converted:
+                try:
+                    from pydub import AudioSegment
+                    seg = AudioSegment.from_file(_io.BytesIO(raw_bytes))
+                    seg = seg.set_frame_rate(16000).set_channels(1)
+                    seg.export(wav_path, format="wav")
+                    converted = True
+                except Exception:
+                    pass
+
+            if converted and os.path.exists(wav_path):
+                import speech_recognition as sr
+                recognizer = sr.Recognizer()
+                with sr.AudioFile(wav_path) as source:
+                    audio_recorded = recognizer.record(source)
+                try:
+                    transcribed = recognizer.recognize_google(audio_recorded, language=voice_lang_code)
+                except sr.UnknownValueError:
+                    try:
+                        transcribed = recognizer.recognize_google(audio_recorded, language="en-US")
+                    except sr.UnknownValueError:
+                        err_msg = "⚠️ কিছু শোনা যায়নি — একটু জোরে বলুন বা কাছে ধরুন।"
+                except sr.RequestError as e:
+                    err_msg = f"⚠️ Internet error: {e}"
+                finally:
+                    try: os.unlink(wav_path)
+                    except: pass
+            else:
+                err_msg = "⚠️ Audio convert হয়নি। Terminal-e run koro:\n`pip install pydub soundfile` এবং ffmpeg install koro।"
+
+            try: os.unlink(tmp_path)
+            except: pass
+
+        except ImportError:
+            err_msg = "⚠️ Run: `pip install SpeechRecognition soundfile`"
+        except Exception as e:
+            err_msg = f"⚠️ Error: {str(e)[:120]}"
+
+        if transcribed:
+            st.success(f"✔ শুনলাম: **{transcribed}**")
+            st.session_state.preset_input = transcribed
+            st.session_state.auto_send = True
+            st.rerun()
+        elif err_msg:
+            st.warning(err_msg)
+
+
+    # INPUT ROW
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+    c1, c2 = st.columns([6, 1])
+
+    dv = st.session_state.preset_input
+    if not (dv and st.session_state.auto_send):
+        st.session_state.preset_input = ""
+
+    with c1:
+        user_input = st.text_input("Message", value=dv,
+            placeholder="Message SANJU... (Bengali or English)",
+            label_visibility="collapsed", key="chat_input")
+    with c2:
+        send = st.button("↑ Send", use_container_width=True)
+
+    should_send = send or (st.session_state.auto_send and user_input.strip())
+    if st.session_state.auto_send:
+        st.session_state.auto_send = False
+        st.session_state.preset_input = ""
+
+    # ── GENERATE ──────────────────────────────────────
+    if should_send and user_input.strip():
+        st.session_state.search_history.append(user_input.strip())
+
+        # ── IMAGE GENERATION ──
+        if is_image_request(user_input) and not st.session_state.pending_file:
+            img_placeholder = st.empty()
+            img_placeholder.markdown("""<div class='thinking-wrap'>
+                <div class='av av-ai'>✦</div>
+                <div class='thinking-bubble'>
+                    <div class='thinking-header'>🎨 &nbsp;GENERATING IMAGE...</div>
+                    <div class='thinking-step'><span class='step-icon' style='color:#f5a623'>⟳</span><span style='color:#a0a0c0'>Creating your image via Pollinations AI...</span></div>
+                    <div class='shimmer-line'></div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            img_prompt_sys = "Extract only the image description from the user message. Return ONLY the description, no extra words."
+            try:
+                prompt_llm = ChatMistralAI(model=model_name, temperature=0.3, max_tokens=100, mistral_api_key=api_key)
+                prompt_resp = prompt_llm.invoke([
+                    SystemMessage(content=img_prompt_sys),
+                    HumanMessage(content=user_input)
+                ])
+                clean_prompt = prompt_resp.content.strip()
+            except Exception:
+                clean_prompt = user_input
+
+            img_url = generate_image_pollinations(clean_prompt)
+
+            def fetch_image(url, retries=3):
+                for attempt in range(retries):
+                    try:
+                        resp = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+                        if resp.status_code != 200:
+                            time.sleep(2)
+                            continue
+                        raw = resp.content
+                        PILImage.open(io.BytesIO(raw)).verify()
+                        return raw
+                    except Exception:
+                        time.sleep(3)
+                return None
+
+            img_bytes = fetch_image(img_url)
+            img_placeholder.empty()
+
+            st.session_state.messages.append(("user", user_input, None))
+            if img_bytes:
+                st.session_state.messages.append(("assistant", clean_prompt, None, "IMG", img_bytes))
+            else:
+                st.session_state.messages.append(("assistant",
+                    "❌ Image could not be generated. Pollinations may be slow — please try again.",
+                    None, "EN"))
+
+            st.session_state.response_times.append(0.0)
+            st.rerun()
+            st.stop()
+
+        # ── LANGUAGE DETECTION ──
+        detected = detect_language(user_input)
+        use_bn = (lang_mode == "🇧🇩 Always Bengali") or (lang_mode == "🤖 Auto Detect" and detected == "BN")
+        final_sys = build_system(system_prompt, use_bn)
+
+        # ── BUILD CONVERSATION HISTORY ──
+        lc_msgs = [SystemMessage(content=final_sys)]
+        for item in st.session_state.messages:
+            r, c = item[0], item[1]
+            lang_flag = item[3] if len(item) > 3 else "EN"
+            if lang_flag == "IMG":
+                continue
+            lc_msgs.append(HumanMessage(content=c) if r == "user" else AIMessage(content=c))
+
+        # ── BUILD CURRENT USER MESSAGE ──
+        attach_meta = None
+        if st.session_state.pending_file:
+            pf   = st.session_state.pending_file
+            fn   = st.session_state.pending_file_name
+            ft   = st.session_state.pending_file_type
+            attach_meta = {"name": fn, "type": ft}
+
+            if ft == "image":
+                lc_msgs.append(HumanMessage(content=[
+                    {"type": "text", "text": user_input},
+                    {"type": "image_url", "image_url": f"data:{pf['mime']};base64,{pf['b64']}"}
+                ]))
+            elif ft == "pdf":
+                extracted = pf.get("text", "") or ""
+                if extracted.strip():
+                    snippet   = extracted[:12000]
+                    truncated = "\n[...document truncated due to length]" if len(extracted) > 12000 else ""
+                    prompt    = (
+                        f"PDF Document: '{fn}'\n\n"
+                        f"{snippet}{truncated}\n\n"
+                        f"---\nUser: {user_input}"
+                    )
+                    lc_msgs.append(HumanMessage(content=prompt))
+                else:
+                    lc_msgs.append(HumanMessage(content=(
+                        f"The user attached a PDF named '{fn}' but text could not be extracted. "
+                        f"User's message: {user_input}"
+                    )))
+
+            st.session_state.pending_file      = None
+            st.session_state.pending_file_name = ""
+            st.session_state.pending_file_type = ""
+        else:
+            lc_msgs.append(HumanMessage(content=user_input))
+
+        # ── THINKING ANIMATION ──
+        tp = st.empty()
+        STEPS = [
+            ("⟳", "আপনার বার্তা পড়ছি..." if use_bn else "Reading your message..."),
+            ("⟳", "প্রসঙ্গ বিশ্লেষণ..." if use_bn else "Analysing context..."),
+            ("⟳", "জ্ঞান অনুসন্ধান..." if use_bn else "Searching knowledge base..."),
+            ("⟳", "উত্তর তৈরি..." if use_bn else "Structuring response..."),
+            ("⟳", "পরিশোধন..." if use_bn else "Refining output..."),
+        ]
+
+        def show_thinking(done):
+            html = ""
+            for i, (icon, lbl) in enumerate(STEPS):
+                if i < done:
+                    html += f"<div class='thinking-step'><span class='step-icon done' style='color:#2dd4bf'>✔</span><span style='color:#5a5a80;text-decoration:line-through'>{lbl}</span></div>"
+                elif i == done:
+                    html += f"<div class='thinking-step'><span class='step-icon' style='color:#f5a623'>{icon}</span><span style='color:#a0a0c0'>{lbl}</span></div>"
+                else:
+                    html += f"<div class='thinking-step' style='opacity:.3'><span class='step-icon done'>○</span><span>{lbl}</span></div>"
+            tp.markdown(f"""<div class='thinking-wrap'>
+                <div class='av av-ai'>✦</div>
+                <div class='thinking-bubble'>
+                    <div class='thinking-header'>◈ &nbsp;{'চিন্তা করছি...' if use_bn else 'THINKING PROCESS'}</div>
+                    {html}<div class='shimmer-line'></div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+        # ── ADD USER MSG TO HISTORY NOW ──
+        st.session_state.messages.append(("user", user_input, attach_meta))
+
+        try:
+            import threading
+            t0  = time.time()
+            llm = ChatMistralAI(model=model_name, temperature=temperature,
+                                max_tokens=max_tokens, mistral_api_key=api_key)
+            res, err = {}, {}
+
+            def run():
+                try: res["r"] = llm.invoke(lc_msgs)
+                except Exception as e: err["e"] = e
+
+            t = threading.Thread(target=run); t.start()
+            for si in range(len(STEPS)):
+                show_thinking(si)
+                t.join(timeout=0.55)
+                if not t.is_alive():
+                    for ri in range(si+1, len(STEPS)):
+                        show_thinking(ri); time.sleep(0.08)
+                    break
+            t.join()
+
+            if "e" in err: raise err["e"]
+
+            elapsed = round(time.time()-t0, 2)
+            reply   = res["r"].content
+            tp.empty()
+
+            rl = "BN" if use_bn else "EN"
+            st.session_state.messages.append(("assistant", reply, None, rl))
+            st.session_state.response_times.append(elapsed)
+
+            # ── STREAMING / TYPEWRITER EFFECT ──────────
+            # Show the latest AI response with typewriter animation
+            stream_placeholder = st.empty()
+            badge = "<span class='lang-badge'>বাংলা</span>" if rl == "BN" else ""
+
+            # Typewriter: reveal word by word
+            words = reply.split(" ")
+            displayed = ""
+            CHUNK = 3  # reveal 3 words at a time for speed
+            for wi in range(0, len(words), CHUNK):
+                chunk = " ".join(words[wi:wi+CHUNK])
+                displayed += ("" if wi == 0 else " ") + chunk
+                stream_placeholder.markdown(f"""<div class='msg-wrap'>
+                    <div class='av av-ai'>✦</div>
+                    <div class='bubble bubble-ai'>
+                        <div class='bubble-meta'><span class='bubble-meta-dot'></span>SANJU · {model_name}{badge}</div>
+                        {displayed}<span class='typing-cursor'></span>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+                time.sleep(0.025)
+
+            # Final render without cursor
+            stream_placeholder.markdown(f"""<div class='msg-wrap'>
+                <div class='av av-ai'>✦</div>
+                <div class='bubble bubble-ai'>
+                    <div class='bubble-meta'><span class='bubble-meta-dot'></span>SANJU · {model_name}{badge}</div>
+                    {reply}
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            # ── STORE TTS → play after rerun ────────────
+            if st.session_state.get("tts_enabled", True):
+                tts_lang = "bn-BD" if rl == "BN" else "en-US"
+                clean_reply = re.sub(r'[#*`_~<>\[\]()]', '', reply)[:600]
+                st.session_state["tts_pending"] = clean_reply
+                st.session_state["tts_lang_pending"] = tts_lang
+
+            st.rerun()
+
+        except Exception as e:
+            tp.empty()
+            st.session_state.messages.pop()  # remove user msg on error
+            st.error(f"❌ API Error: {e}")
